@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin:0; height:100%; background:transparent; overflow:hidden; font:14px system-ui, -apple-system, "Segoe UI", sans-serif; color:#e8eaed; user-select:none; -webkit-user-select:none; }
+  .bar { position:absolute; inset:6px; border-radius:999px; background:#0b0c10f0; border:1px solid #2c303a; display:flex; align-items:center; gap:8px; padding:0 8px 0 16px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#ef4444; animation:blink 1s infinite; flex-shrink:0; }
+  .paused .dot { animation:none; background:#8b919c; }
+  .processing .dot { animation:none; background:#625df5; }
+  @keyframes blink { 50% { opacity:.25; } }
+  #t { font-variant-numeric:tabular-nums; min-width:46px; }
+  .grow { flex:1; height:100%; }
+  button { border:0; border-radius:999px; height:34px; padding:0 12px; font:inherit; color:inherit; cursor:pointer; background:#262a33; }
+  button:disabled { opacity:.4; cursor:default; }
+  #stop { background:#ef4444; font-weight:700; }
+  #count { position:absolute; inset:6px; border-radius:999px; background:#625df5; display:none; align-items:center; justify-content:center; font-weight:700; font-size:16px; }
+</style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <div class="dot"></div>
+    <div id="t">0:00</div>
+    <div class="grow" data-tauri-drag-region></div>
+    <button id="pause" title="Jeda / lanjut">❚❚</button>
+    <button id="cancel" title="Batalkan">✕</button>
+    <button id="stop">Selesai</button>
+  </div>
+  <div id="count"></div>
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (id) => document.getElementById(id);
+const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+let base = 0, since = 0, running = false;
+
+setInterval(() => { $('t').textContent = fmt(base + (running ? Date.now() - since : 0)); }, 200);
+
+listen('rec-countdown', (e) => {
+  const n = e.payload;
+  $('count').style.display = n > 0 ? 'flex' : 'none';
+  // On Linux the bar is hidden while recording (it would be captured), so say how to stop.
+  const linux = /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+  $('count').style.fontSize = linux ? '13px' : '';
+  $('count').textContent = n > 0 ? `Mulai dalam ${n}…` + (linux ? ' · Stop: Alt+Shift+L' : '') : '';
+  if (n > 0) { base = 0; running = false; setButtons(false); }
+});
+
+listen('rec-state', (e) => {
+  const { state, elapsed_ms } = e.payload;
+  base = elapsed_ms; since = Date.now(); running = state === 'recording';
+  $('bar').className = 'bar ' + state;
+  $('pause').textContent = state === 'paused' ? '▶' : '❚❚';
+  setButtons(state === 'recording' || state === 'paused');
+  if (state === 'processing') $('stop').textContent = 'Menyimpan…';
+  if (state === 'idle') $('stop').textContent = 'Selesai';
+});
+
+function setButtons(on) { for (const b of ['pause', 'cancel', 'stop']) $(b).disabled = !on; }
+const call = (cmd) => async () => { setButtons(false); try { await invoke(cmd); } catch (e) { console.error(e); setButtons(true); } };
+$('pause').onclick = call('pause_recording');
+$('cancel').onclick = call('cancel_recording');
+$('stop').onclick = call('stop_recording');
+</script>
+</body>
+</html>

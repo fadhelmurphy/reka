@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reka</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#262a33; --text:#e8eaed; --muted:#8b919c; --accent:#625df5; --red:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 28px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; display:flex; gap:8px; align-items:center; }
+  header h1 span { width:12px; height:12px; border-radius:50%; background:var(--accent); display:inline-block; }
+  main { max-width:1100px; margin:0 auto; padding:28px; }
+  button, select, input { font:inherit; color:inherit; }
+  .btn { background:var(--accent); border:0; padding:10px 18px; border-radius:10px; cursor:pointer; font-weight:600; }
+  .btn.ghost { background:transparent; border:1px solid var(--line); font-weight:500; }
+  .btn.red { background:var(--red); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .setup { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:20px; display:flex; flex-wrap:wrap; gap:14px; align-items:end; }
+  .field { display:flex; flex-direction:column; gap:6px; }
+  .field label { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  select, input[type=text] { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 10px; min-width:170px; }
+  h2 { font-size:16px; margin:32px 0 14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .card video { width:100%; aspect-ratio:16/9; background:#000; display:block; object-fit:contain; cursor:pointer; }
+  .card .meta { padding:10px 12px; }
+  .card .title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .sub { color:var(--muted); font-size:12px; }
+  .card .actions { display:flex; gap:6px; padding:0 12px 12px; }
+  .card .actions button { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; font-size:13px; }
+  .empty { color:var(--muted); padding:30px; text-align:center; border:1px dashed var(--line); border-radius:12px; }
+
+  /* camera bubble (preview while setting up / recording) */
+  #bubble { position:fixed; left:24px; bottom:90px; width:180px; height:180px; border-radius:50%; overflow:hidden; border:3px solid var(--accent); box-shadow:0 8px 30px #0008; display:none; cursor:grab; z-index:20; }
+  #bubble video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+
+  /* recording control bar */
+  #bar { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#000d; backdrop-filter:blur(8px); border:1px solid var(--line); border-radius:999px; padding:8px 10px 8px 18px; display:none; gap:10px; align-items:center; z-index:30; }
+  #bar .dot { width:10px; height:10px; border-radius:50%; background:var(--red); animation:blink 1s infinite; }
+  #bar.paused .dot { animation:none; background:var(--muted); }
+  #timer { font-variant-numeric:tabular-nums; min-width:52px; }
+  @keyframes blink { 50% { opacity:.3; } }
+
+  #countdown { position:fixed; inset:0; display:none; place-items:center; font-size:140px; font-weight:800; background:#0009; z-index:40; }
+
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:16px; padding:22px; width:min(720px,94vw); }
+  dialog::backdrop { background:#000a; }
+  dialog video { width:100%; border-radius:10px; background:#000; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:14px; }
+  .row input { flex:1; }
+  progress { width:100%; height:6px; margin-top:12px; display:none; accent-color:var(--accent); }
+  .toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#000; border:1px solid var(--line); padding:10px 16px; border-radius:10px; z-index:50; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span></span>Reka</h1>
+  <button class="btn" id="startBtn">● Mulai rekam</button>
+</header>
+
+<main>
+  <div class="setup">
+    <div class="field">
+      <label>Mode</label>
+      <select id="mode">
+        <option value="screen+cam">Layar + Kamera</option>
+        <option value="screen">Layar saja</option>
+        <option value="cam">Kamera saja</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Kamera</label>
+      <select id="camSel"></select>
+    </div>
+    <div class="field">
+      <label>Mikrofon</label>
+      <select id="micSel"></select>
+    </div>
+    <div class="field">
+      <label>Posisi bubble</label>
+      <select id="corner">
+        <option value="bl">Kiri bawah</option>
+        <option value="br">Kanan bawah</option>
+        <option value="tl">Kiri atas</option>
+        <option value="tr">Kanan atas</option>
+      </select>
+    </div>
+    <button class="btn ghost" id="previewBtn">Preview kamera</button>
+  </div>
+
+  <h2>Video saya</h2>
+  <div class="grid" id="library"></div>
+</main>
+
+<div id="bubble"><video id="camPreview" autoplay muted playsinline></video></div>
+<div id="countdown"></div>
+<div id="bar">
+  <div class="dot"></div>
+  <div id="timer">0:00</div>
+  <button class="btn ghost" id="pauseBtn">Jeda</button>
+  <button class="btn ghost" id="restartBtn" title="Batalkan">✕</button>
+  <button class="btn red" id="stopBtn">Selesai</button>
+</div>
+
+<dialog id="doneDlg">
+  <video id="result" controls playsinline></video>
+  <div class="row">
+    <input type="text" id="titleInp" placeholder="Judul video" />
+    <button class="btn ghost" id="discardBtn">Buang</button>
+    <button class="btn" id="uploadBtn">Simpan & bagikan</button>
+  </div>
+  <progress id="prog" max="100" value="0"></progress>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const toast = (msg) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2200); };
+const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+// ---------- devices ----------
+async function loadDevices() {
+  try { (await navigator.mediaDevices.getUserMedia({ audio: true, video: true })).getTracks().forEach(t => t.stop()); } catch {}
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const fill = (sel, kind, noneLabel) => {
+    sel.innerHTML = `<option value="">${noneLabel}</option>` + devs.filter(d => d.kind === kind)
+      .map((d, i) => `<option value="${d.deviceId}">${d.label || kind + ' ' + (i + 1)}</option>`).join('');
+    if (sel.options.length > 1) sel.selectedIndex = 1;
+  };
+  fill($('camSel'), 'videoinput', 'Tanpa kamera');
+  fill($('micSel'), 'audioinput', 'Tanpa mikrofon');
+}
+
+let camStream = null;
+async function openCam(size = 480) {
+  stopStream(camStream); camStream = null;
+  const id = $('camSel').value;
+  if (!id) return null;
+  camStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: id }, width: size, height: size } });
+  $('camPreview').srcObject = camStream;
+  $('bubble').style.display = 'block';
+  return camStream;
+}
+function stopStream(s) { s && s.getTracks().forEach(t => t.stop()); }
+
+$('previewBtn').onclick = async () => {
+  if (camStream) { stopStream(camStream); camStream = null; $('bubble').style.display = 'none'; return; }
+  try { await openCam(); } catch (e) { toast('Kamera gagal: ' + e.message); }
+};
+
+// draggable bubble
+(() => {
+  const b = $('bubble'); let dx, dy, drag = false;
+  b.onpointerdown = (e) => { drag = true; dx = e.clientX - b.offsetLeft; dy = e.clientY - b.offsetTop; b.setPointerCapture(e.pointerId); };
+  b.onpointermove = (e) => { if (!drag) return; b.style.left = (e.clientX - dx) + 'px'; b.style.top = (e.clientY - dy) + 'px'; b.style.bottom = 'auto'; };
+  b.onpointerup = () => drag = false;
+})();
+
+// ---------- recording ----------
+// Background tabs throttle requestAnimationFrame/setInterval, which would freeze the
+// composited canvas while the user is in another window. A worker timer is not throttled.
+const ticker = new Worker(URL.createObjectURL(new Blob([
+  'let t;onmessage=e=>{clearInterval(t);if(e.data>0)t=setInterval(()=>postMessage(0),e.data)}'
+], { type: 'text/javascript' })));
+
+let rec = null, chunks = [], streams = [], audioCtx = null;
+let startedAt = 0, pausedTotal = 0, pausedAt = 0, timerH = null, cancelled = false, lastBlob = null, lastDuration = 0;
+
+function pickMime() {
+  const c = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  return c.find(m => MediaRecorder.isTypeSupported(m)) || '';
+}
+
+async function buildStream() {
+  const mode = $('mode').value;
+  const micId = $('micSel').value;
+  audioCtx = new AudioContext();
+  const dest = audioCtx.createMediaStreamDestination();
+  let hasAudio = false;
+
+  if (micId) {
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId }, echoCancellation: true, noiseSuppression: true } });
+    streams.push(mic);
+    audioCtx.createMediaStreamSource(mic).connect(dest); hasAudio = true;
+  }
+
+  if (mode === 'cam') {
+    const cam = await openCam(1080);
+    if (!cam) throw new Error('Pilih kamera dulu');
+    $('bubble').style.display = 'none';
+    return new MediaStream([...cam.getVideoTracks(), ...(hasAudio ? dest.stream.getAudioTracks() : [])]);
+  }
+
+  const screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+  streams.push(screen);
+  screen.getVideoTracks()[0].addEventListener('ended', () => stopRecording());
+  if (screen.getAudioTracks().length) { audioCtx.createMediaStreamSource(screen).connect(dest); hasAudio = true; }
+
+  const cam = mode === 'screen+cam' ? await openCam(480) : null;
+  if (!cam) {
+    return new MediaStream([...screen.getVideoTracks(), ...(hasAudio ? dest.stream.getAudioTracks() : [])]);
+  }
+
+  // Composite screen + circular camera bubble on a canvas.
+  const sv = document.createElement('video'); sv.muted = true; sv.srcObject = screen; await sv.play();
+  const cv = document.createElement('video'); cv.muted = true; cv.srcObject = cam; await cv.play();
+  const { width = 1920, height = 1080 } = screen.getVideoTracks()[0].getSettings();
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const corner = $('corner').value;
+
+  ticker.onmessage = () => {
+    const W = canvas.width, H = canvas.height;
+    if (sv.videoWidth && (sv.videoWidth !== W || sv.videoHeight !== H)) { canvas.width = sv.videoWidth; canvas.height = sv.videoHeight; }
+    ctx.drawImage(sv, 0, 0, canvas.width, canvas.height);
+    const d = Math.round(Math.min(canvas.width, canvas.height) * 0.24), m = Math.round(d * 0.15);
+    const x = corner.includes('r') ? canvas.width - d - m : m;
+    const y = corner.includes('t') ? m : canvas.height - d - m;
+    const vw = cv.videoWidth || 1, vh = cv.videoHeight || 1, s = Math.min(vw, vh);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); ctx.closePath(); ctx.clip();
+    ctx.translate(x + d, y); ctx.scale(-1, 1); // mirror like the preview
+    ctx.drawImage(cv, (vw - s) / 2, (vh - s) / 2, s, s, 0, 0, d, d);
+    ctx.restore();
+    ctx.lineWidth = Math.max(4, d * 0.025); ctx.strokeStyle = '#625df5';
+    ctx.beginPath(); ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); ctx.stroke();
+  };
+  ticker.postMessage(1000 / 30);
+  const out = canvas.captureStream(30);
+  return new MediaStream([...out.getVideoTracks(), ...(hasAudio ? dest.stream.getAudioTracks() : [])]);
+}
+
+async function countdown() {
+  const c = $('countdown'); c.style.display = 'grid';
+  for (let i = 3; i > 0; i--) { c.textContent = i; await new Promise(r => setTimeout(r, 800)); }
+  c.style.display = 'none';
+}
+
+async function startRecording() {
+  if (rec) return;
+  cancelled = false; chunks = [];
+  let stream;
+  try { stream = await buildStream(); }
+  catch (e) { cleanup(); if (e.name !== 'NotAllowedError') toast('Gagal: ' + e.message); return; }
+
+  await countdown();
+  const mimeType = pickMime();
+  rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = onStopped;
+  rec.start(1000);
+  startedAt = Date.now(); pausedTotal = 0; pausedAt = 0;
+  $('bar').style.display = 'flex'; $('bar').classList.remove('paused'); $('pauseBtn').textContent = 'Jeda';
+  $('startBtn').disabled = true;
+  timerH = setInterval(() => $('timer').textContent = fmt(elapsed()), 250);
+}
+
+function elapsed() { return (pausedAt || Date.now()) - startedAt - pausedTotal; }
+
+function stopRecording() { if (rec && rec.state !== 'inactive') { lastDuration = elapsed(); rec.stop(); } }
+
+function cleanup() {
+  ticker.postMessage(0);
+  streams.forEach(stopStream); streams = [];
+  stopStream(camStream); camStream = null;
+  audioCtx && audioCtx.close(); audioCtx = null;
+  $('bubble').style.display = 'none';
+  $('bar').style.display = 'none';
+  $('startBtn').disabled = false;
+  clearInterval(timerH); $('timer').textContent = '0:00';
+}
+
+function onStopped() {
+  const type = rec.mimeType || 'video/webm';
+  rec = null; cleanup();
+  if (cancelled || !chunks.length) return;
+  lastBlob = new Blob(chunks, { type });
+  $('result').src = URL.createObjectURL(lastBlob);
+  $('titleInp').value = '';
+  $('prog').style.display = 'none';
+  $('uploadBtn').disabled = false;
+  $('doneDlg').showModal();
+}
+
+$('startBtn').onclick = startRecording;
+$('stopBtn').onclick = stopRecording;
+$('restartBtn').onclick = () => { cancelled = true; stopRecording(); toast('Rekaman dibatalkan'); };
+$('pauseBtn').onclick = () => {
+  if (!rec) return;
+  if (rec.state === 'recording') { rec.pause(); pausedAt = Date.now(); $('pauseBtn').textContent = 'Lanjut'; $('bar').classList.add('paused'); }
+  else { rec.resume(); pausedTotal += Date.now() - pausedAt; pausedAt = 0; $('pauseBtn').textContent = 'Jeda'; $('bar').classList.remove('paused'); }
+};
+document.addEventListener('keydown', (e) => {
+  if (e.altKey && e.shiftKey && e.code === 'KeyL') rec ? stopRecording() : startRecording();
+});
+
+// ---------- upload ----------
+$('discardBtn').onclick = () => { $('doneDlg').close(); URL.revokeObjectURL($('result').src); lastBlob = null; };
+$('uploadBtn').onclick = () => {
+  if (!lastBlob) return;
+  const fd = new FormData();
+  fd.append('title', $('titleInp').value);
+  fd.append('duration_ms', Math.round(lastDuration));
+  fd.append('file', lastBlob, 'recording.' + (lastBlob.type.includes('mp4') ? 'mp4' : 'webm'));
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/videos');
+  $('prog').style.display = 'block'; $('uploadBtn').disabled = true;
+  xhr.upload.onprogress = (e) => e.lengthComputable && ($('prog').value = e.loaded / e.total * 100);
+  xhr.onload = async () => {
+    if (xhr.status !== 201) { toast('Upload gagal: ' + xhr.responseText); $('uploadBtn').disabled = false; return; }
+    const v = JSON.parse(xhr.responseText);
+    const link = location.origin + v.share_url;
+    try { await navigator.clipboard.writeText(link); toast('Link disalin ke clipboard'); } catch { toast(link); }
+    $('doneDlg').close(); lastBlob = null;
+    loadLibrary();
+  };
+  xhr.onerror = () => { toast('Upload gagal'); $('uploadBtn').disabled = false; };
+  xhr.send(fd);
+};
+
+// ---------- library ----------
+const esc = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function loadLibrary() {
+  const vids = await (await fetch('/api/videos')).json();
+  const lib = $('library');
+  if (!vids.length) { lib.innerHTML = '<div class="empty">Belum ada rekaman. Klik “Mulai rekam” atau tekan Alt+Shift+L.</div>'; return; }
+  lib.innerHTML = vids.map(v => `
+    <div class="card" data-id="${v.id}">
+      <video src="${v.url}#t=0.5" preload="metadata" muted onclick="open('${v.share_url}','_blank')"></video>
+      <div class="meta">
+        <div class="title" title="${esc(v.title)}">${esc(v.title)}</div>
+        <div class="sub">${new Date(v.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })} · ${fmt(v.duration_ms)} · ${v.views} views · ${(v.size_bytes / 1048576).toFixed(1)} MB</div>
+      </div>
+      <div class="actions">
+        <button data-act="copy">Salin link</button>
+        <button data-act="rename">Ubah nama</button>
+        <button data-act="del">Hapus</button>
+      </div>
+    </div>`).join('');
+}
+$('library').onclick = async (e) => {
+  const act = e.target.dataset.act; if (!act) return;
+  const card = e.target.closest('.card'), id = card.dataset.id;
+  if (act === 'copy') { await navigator.clipboard.writeText(`${location.origin}/v/${id}`); toast('Link disalin'); }
+  if (act === 'rename') {
+    const t = prompt('Judul baru:', card.querySelector('.title').textContent); if (!t) return;
+    await fetch(`/api/videos/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: t }) });
+    loadLibrary();
+  }
+  if (act === 'del' && confirm('Hapus video ini?')) { await fetch(`/api/videos/${id}`, { method: 'DELETE' }); loadLibrary(); }
+};
+
+loadDevices().catch(() => {});
+loadLibrary();
+</script>
+</body>
+</html>

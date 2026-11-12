@@ -1,0 +1,17 @@
+[package]
+name = "reka-studio"
+version = "0.1.0"
+edition = "2021"
+description = "Screen-Studio-style compositor: auto zoom, smooth cursor, backgrounds"
+
+[lib]
+name = "reka_studio"
+
+[[bin]]
+name = "reka-studio"
+path = "src/bin/reka-studio.rs"
+
+[dependencies]
+tiny-skia = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

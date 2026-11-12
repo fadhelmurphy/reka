@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reka</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#262a33; --text:#e8eaed; --muted:#8b919c; --accent:#625df5; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 28px; border-bottom:1px solid var(--line); }
+  header a { color:var(--text); text-decoration:none; font-weight:700; }
+  main { max-width:1000px; margin:0 auto; padding:24px; }
+  video { width:100%; max-height:75vh; background:#000; border-radius:12px; }
+  h1 { font-size:22px; margin:16px 0 4px; }
+  .sub { color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+  .btn { background:var(--panel); border:1px solid var(--line); color:var(--text); padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none; font:inherit; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); }
+  .speed { margin-left:auto; display:flex; gap:4px; }
+  .speed button.on { background:var(--accent); }
+</style>
+</head>
+<body>
+<header><a href="/">● Reka</a></header>
+<main>
+  <video id="player" controls playsinline></video>
+  <h1 id="title">Memuat…</h1>
+  <div class="sub" id="sub"></div>
+  <div class="row">
+    <button class="btn primary" id="copy">Salin link</button>
+    <a class="btn" id="dl" download>Unduh</a>
+    <div class="speed" id="speed"></div>
+  </div>
+</main>
+<script>
+const id = location.pathname.split('/').pop();
+const p = document.getElementById('player');
+
+(async () => {
+  const r = await fetch('/api/videos/' + id);
+  if (!r.ok) { document.getElementById('title').textContent = 'Video tidak ditemukan'; return; }
+  const v = await r.json();
+  document.title = v.title + ' · Reka';
+  document.getElementById('title').textContent = v.title;
+  document.getElementById('sub').textContent =
+    new Date(v.created_at).toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' }) + ' · ' + (v.views + 1) + ' views';
+  document.getElementById('dl').href = v.url;
+  p.src = v.url;
+  fetch(`/api/videos/${id}/view`, { method: 'POST' });
+
+  // MediaRecorder WebM files have no duration in their header, so the seek bar is broken
+  // until the browser has scanned to the end. Force that scan once.
+  p.addEventListener('loadedmetadata', function fix() {
+    if (p.duration === Infinity || isNaN(p.duration)) {
+      p.currentTime = 1e101;
+      p.addEventListener('timeupdate', function back() { p.removeEventListener('timeupdate', back); p.currentTime = 0; });
+    }
+    p.removeEventListener('loadedmetadata', fix);
+  });
+})();
+
+document.getElementById('copy').onclick = async (e) => {
+  await navigator.clipboard.writeText(location.href);
+  e.target.textContent = 'Tersalin ✓'; setTimeout(() => e.target.textContent = 'Salin link', 1500);
+};
+
+const sp = document.getElementById('speed');
+[1, 1.2, 1.5, 1.7, 2].forEach(s => {
+  const b = document.createElement('button'); b.className = 'btn' + (s === 1 ? ' on' : ''); b.textContent = s + '×';
+  b.onclick = () => { p.playbackRate = s; sp.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); };
+  sp.appendChild(b);
+});
+</script>
+</body>
+</html>

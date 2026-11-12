@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the panel, camera bubble and control bar",
+  "windows": ["main", "bubble", "bar"],
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-size"]
+}
