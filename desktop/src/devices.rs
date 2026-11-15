@@ -3,20 +3,28 @@
 use crate::recorder::{ffmpeg_cmd, Screen};
 use serde::Serialize;
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Mic {
     pub id: String,
     pub label: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Camera {
+    /// v4l2 path, dshow device name or avfoundation index.
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Default, Clone, Serialize)]
 pub struct Devices {
     pub screens: Vec<Screen>,
     pub mics: Vec<Mic>,
+    pub cameras: Vec<Camera>,
     pub warning: Option<String>,
 }
 
-pub fn list(app: &tauri::AppHandle) -> Devices {
+pub fn list() -> Devices {
     let mut warning = None;
     let probe = ffmpeg_cmd().arg("-version").output();
     if probe.map(|o| !o.status.success()).unwrap_or(true) {
@@ -33,29 +41,33 @@ pub fn list(app: &tauri::AppHandle) -> Devices {
 
     #[cfg(target_os = "macos")]
     {
-        let (mut screens, mics) = parse_avfoundation(&ffmpeg_stderr(&["-f", "avfoundation", "-list_devices", "true", "-i", ""]));
+        let out = ffmpeg_stderr(&["-f", "avfoundation", "-list_devices", "true", "-i", ""]);
+        let (mut screens, mics) = parse_avfoundation(&out);
+        let cameras = parse_avfoundation_cameras(&out);
         // Studio mode needs each screen's rectangle in points (what the mouse hook reports);
-        // avfoundation lists screens in the same order as NSScreen/Tauri monitors.
-        let mons = app.available_monitors().unwrap_or_default();
+        // avfoundation lists screens in the same order as the OS display list.
+        let infos = display_info::DisplayInfo::all().unwrap_or_default();
         for (i, sc) in screens.iter_mut().enumerate() {
-            if let Some(m) = mons.get(i) {
-                let f = m.scale_factor();
-                sc.x = (m.position().x as f64 / f) as i32;
-                sc.y = (m.position().y as f64 / f) as i32;
-                sc.w = (m.size().width as f64 / f) as u32;
-                sc.h = (m.size().height as f64 / f) as u32;
+            if let Some(d) = infos.get(i) {
+                sc.x = d.x;
+                sc.y = d.y;
+                sc.w = d.width;
+                sc.h = d.height;
             }
         }
-        return Devices { screens, mics, warning };
+        return Devices { screens, mics, cameras, warning };
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let screens = monitors(app);
+        let screens = monitors();
         #[cfg(target_os = "windows")]
-        let mics = parse_dshow(&ffmpeg_stderr(&["-list_devices", "true", "-f", "dshow", "-i", "dummy"]));
+        let (mics, cameras) = {
+            let out = ffmpeg_stderr(&["-list_devices", "true", "-f", "dshow", "-i", "dummy"]);
+            (parse_dshow(&out), parse_dshow_cameras(&out))
+        };
         #[cfg(not(target_os = "windows"))]
-        let mics = pulse_sources();
-        Devices { screens, mics, warning }
+        let (mics, cameras) = (pulse_sources(), v4l2_cameras());
+        Devices { screens, mics, cameras, warning }
     }
 }
 
@@ -69,24 +81,103 @@ fn ffmpeg_stderr(args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// Screens in the pixel space the capture device uses (physical pixels; points on macOS).
 #[cfg(not(target_os = "macos"))]
-fn monitors(app: &tauri::AppHandle) -> Vec<Screen> {
-    let primary = app.primary_monitor().ok().flatten().map(|m| *m.position());
-    let mut v: Vec<Screen> = app
-        .available_monitors()
+fn monitors() -> Vec<Screen> {
+    let mut v: Vec<Screen> = display_info::DisplayInfo::all()
         .unwrap_or_default()
         .into_iter()
         .enumerate()
-        .map(|(i, m)| {
-            let (p, sz) = (m.position(), m.size());
-            let name = m.name().cloned().unwrap_or_else(|| format!("Layar {}", i + 1));
-            let star = if primary == Some(*p) { " (utama)" } else { "" };
-            Screen { label: format!("{name}{star} — {}×{}", sz.width, sz.height), mac_index: None,
-                     x: p.x, y: p.y, w: sz.width, h: sz.height }
+        .map(|(i, d)| {
+            // display-info reports Linux/X11 geometry divided by the scale factor; x11grab wants pixels.
+            let f = if cfg!(target_os = "linux") { d.scale_factor.max(1.0) } else { 1.0 };
+            let (x, y) = ((d.x as f32 * f).round() as i32, (d.y as f32 * f).round() as i32);
+            let (w, h) = ((d.width as f32 * f).round() as u32, (d.height as f32 * f).round() as u32);
+            let name = if d.friendly_name.is_empty() { format!("Layar {}", i + 1) } else { d.friendly_name.clone() };
+            let star = if d.is_primary { " (utama)" } else { "" };
+            Screen { label: format!("{name}{star} — {w}×{h}"), mac_index: None, x, y, w, h }
         })
         .collect();
     // Primary first so it is the default choice.
     v.sort_by_key(|s| !s.label.contains("(utama)"));
+    v
+}
+
+/// Capture nodes of /dev/video* (the odd nodes are usually metadata streams).
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn v4l2_cameras() -> Vec<Camera> {
+    let mut v = vec![];
+    for e in std::fs::read_dir("/sys/class/video4linux").into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("video") {
+            continue;
+        }
+        let index = std::fs::read_to_string(e.path().join("index")).unwrap_or_default();
+        if index.trim() != "0" && !index.trim().is_empty() {
+            continue;
+        }
+        let name = std::fs::read_to_string(e.path().join("name")).unwrap_or_else(|_| n.clone()).trim().to_string();
+        v.push(Camera { id: format!("/dev/{n}"), label: format!("{name} ({n})") });
+    }
+    v.sort_by(|a, b| a.id.cmp(&b.id));
+    if std::env::var_os("REKA_FAKE_CAMERA").is_some() {
+        v.push(Camera { id: "fake".into(), label: "Kamera uji (testsrc)".into() });
+    }
+    v
+}
+
+/// Video inputs of the avfoundation list (screens excluded).
+#[allow(dead_code)]
+pub fn parse_avfoundation_cameras(out: &str) -> Vec<Camera> {
+    let mut v = vec![];
+    let mut video = false;
+    for line in out.lines() {
+        if line.contains("AVFoundation video devices") {
+            video = true;
+            continue;
+        }
+        if line.contains("AVFoundation audio devices") {
+            video = false;
+        }
+        if !video {
+            continue;
+        }
+        let Some(p) = line.find("] [") else { continue };
+        let rest = &line[p + 3..];
+        let Some(end) = rest.find(']') else { continue };
+        let Ok(idx) = rest[..end].parse::<u32>() else { continue };
+        let name = rest[end + 1..].trim().to_string();
+        if !name.starts_with("Capture screen") {
+            v.push(Camera { id: idx.to_string(), label: name });
+        }
+    }
+    v
+}
+
+/// DirectShow video devices (`"Name" (video)` or the older section layout).
+#[allow(dead_code)]
+pub fn parse_dshow_cameras(out: &str) -> Vec<Camera> {
+    let mut v: Vec<Camera> = vec![];
+    let mut in_video = false;
+    for line in out.lines() {
+        if line.contains("DirectShow video devices") {
+            in_video = true;
+            continue;
+        }
+        if line.contains("DirectShow audio devices") {
+            in_video = false;
+            continue;
+        }
+        if line.contains("Alternative name") {
+            continue;
+        }
+        let (Some(a), true) = (line.find('"'), line.contains("(video)") || in_video) else { continue };
+        let Some(b) = line[a + 1..].find('"') else { continue };
+        let name = line[a + 1..a + 1 + b].to_string();
+        if !v.iter().any(|c| c.id == name) {
+            v.push(Camera { id: name.clone(), label: name });
+        }
+    }
     v
 }
 
@@ -221,6 +312,14 @@ mod tests {
 [dshow @ 01]     Alternative name "@device_cm_x""#;
         assert_eq!(parse_dshow(old).len(), 1);
         assert_eq!(parse_dshow(old)[0].id, "Mikrofon (USB Audio)");
+        assert_eq!(parse_dshow_cameras(new), vec![Camera { id: "Integrated Camera".into(), label: "Integrated Camera".into() }]);
+        assert_eq!(parse_dshow_cameras(old)[0].id, "Integrated Camera");
+    }
+
+    #[test]
+    fn avfoundation_cameras_skip_screens() {
+        let out = "[AVFoundation indev @ 0x7f9] AVFoundation video devices:\n[AVFoundation indev @ 0x7f9] [0] FaceTime HD Camera\n[AVFoundation indev @ 0x7f9] [1] Capture screen 0\n[AVFoundation indev @ 0x7f9] AVFoundation audio devices:\n[AVFoundation indev @ 0x7f9] [0] Mic";
+        assert_eq!(parse_avfoundation_cameras(out), vec![Camera { id: "0".into(), label: "FaceTime HD Camera".into() }]);
     }
 
     #[test]

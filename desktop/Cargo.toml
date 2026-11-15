@@ -1,28 +1,54 @@
 [package]
 name = "reka-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Reka desktop recorder"
+description = "Reka: screen recorder with Studio effects and automatic subtitles (native Rust, egui)"
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+[[bin]]
+name = "reka"
+path = "src/main.rs"
+
+[features]
+# Automatic subtitles (whisper.cpp built in). Needs cmake; set WHISPER_DONT_GENERATE_BINDINGS=1 to skip libclang.
+whisper = ["reka-studio/whisper"]
 
 [dependencies]
 reka-server = { path = "../server" }
 reka-studio = { path = "../studio" }
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+global-hotkey = "0.10"
+display-info = "0.5"
+rfd = "0.18"
+dirs = "6"
 rdev = "0.5"
-base64 = "0.22"
-tauri = { version = "2", features = ["tray-icon", "macos-private-api", "protocol-asset", "image-png"] }
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-opener = "2"
+mouse_position = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["multipart", "stream", "rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "stream", "rustls-tls", "json", "blocking"] }
 chrono = "0.4"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "2", features = ["v2_40"] }
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[package.metadata.packager]
+product-name = "Reka"
+identifier = "dev.fadhelmurphy.reka"
+description = "Perekam layar dengan efek Studio dan subtitle otomatis"
+authors = ["Fadhel Ijlal Falah"]
+icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+# ffmpeg disalin ke binaries/ffmpeg(.exe) oleh scripts/fetch-ffmpeg.sh; ikut dibundel di samping `reka`.
+resources = [{ src = "binaries/ffmpeg*", target = "." }]
+formats = ["nsis", "dmg", "deb", "appimage"]
+
+[package.metadata.packager.macos]
+info-plist-path = "Info.plist"
+minimum-system-version = "11.0"
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"
+
+[package.metadata.packager.deb]
+depends = ["ffmpeg", "libxdo3", "libxcb-shape0", "libxcb-xfixes0"]

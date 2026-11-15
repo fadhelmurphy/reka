@@ -170,6 +170,15 @@ impl Compositor {
     }
 
     /// Compose one output frame. `src` must be `w`×`h`; `ms` is the frame time.
+    /// The last composed frame, for drawing overlays (captions) on top of it.
+    pub fn canvas_mut(&mut self) -> &mut Pixmap {
+        &mut self.canvas
+    }
+
+    pub fn canvas(&self) -> &Pixmap {
+        &self.canvas
+    }
+
     pub fn render(&mut self, src: &Pixmap, f: &Frame, ms: f32) -> &Pixmap {
         self.canvas.data_mut().copy_from_slice(self.bg.data());
         let (ix, iy, iw, _) = self.inner;

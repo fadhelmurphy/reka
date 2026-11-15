@@ -1,4 +1,4 @@
-use crate::{build_track, Compositor, Frame, InputEvent, Settings};
+use crate::{build_track, Caption, Captioner, Compositor, Frame, InputEvent, Settings};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -75,6 +75,7 @@ pub fn export(
     ffmpeg: &Path,
     input: &Path,
     events: &[InputEvent],
+    captions: &[Caption],
     s: &Settings,
     output: &Path,
     mut progress: impl FnMut(u32),
@@ -86,6 +87,8 @@ pub fn export(
     ev.sort_by_key(|e| e.t);
     let track = build_track(&ev, n, FPS, s);
     let mut comp = Compositor::new(w, h, s, &ev)?;
+    let mut cap = Captioner::new(&s.captions, comp.canvas().width(), comp.canvas().height())?;
+    let show_caps = s.captions.enabled && !captions.is_empty();
 
     let mut dec = command(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -130,7 +133,11 @@ pub fn export(
         }
         let f = track.get(i).or(track.last()).copied().unwrap_or_default();
         let ms = i as f32 * 1000.0 / FPS;
-        if let Err(e) = enc_in.write_all(comp.render(&src, &f, ms).data()) {
+        comp.render(&src, &f, ms);
+        if show_caps {
+            cap.draw(comp.canvas_mut(), ms as u32, captions);
+        }
+        if let Err(e) = enc_in.write_all(comp.canvas().data()) {
             break Err(format!("encoder berhenti: {e}"));
         }
         i += 1;
@@ -160,10 +167,24 @@ pub fn preview(
     ffmpeg: &Path,
     input: &Path,
     events: &[InputEvent],
+    captions: &[Caption],
     s: &Settings,
     t_ms: u64,
     max_w: u32,
 ) -> Result<Vec<u8>, String> {
+    preview_pixmap(ffmpeg, input, events, captions, s, t_ms, max_w)?.encode_png().map_err(|e| e.to_string())
+}
+
+/// Same as [`preview`] but returns the premultiplied-RGBA pixels (for showing in a UI).
+pub fn preview_pixmap(
+    ffmpeg: &Path,
+    input: &Path,
+    events: &[InputEvent],
+    captions: &[Caption],
+    s: &Settings,
+    t_ms: u64,
+    max_w: u32,
+) -> Result<Pixmap, String> {
     let info = probe(ffmpeg, input)?;
     let (w, h) = (info.w, info.h);
     let t = (t_ms as f64 / 1000.0).min((info.duration - 0.1).max(0.0));
@@ -195,16 +216,21 @@ pub fn preview(
     ev.sort_by_key(|e| e.t);
     let mut comp = Compositor::new(w, h, s, &ev)?;
     let f = track.last().copied().unwrap_or_default();
-    let full = comp.render(&src, &f, idx as f32 * 1000.0 / FPS);
+    let ms = idx as f32 * 1000.0 / FPS;
+    comp.render(&src, &f, ms);
+    if s.captions.enabled {
+        Captioner::new(&s.captions, comp.canvas().width(), comp.canvas().height())?.draw(comp.canvas_mut(), t_ms as u32, captions);
+    }
+    let full = comp.canvas();
 
     if w <= max_w {
-        return full.encode_png().map_err(|e| e.to_string());
+        return Ok(full.clone());
     }
     let mh = (h as f32 * max_w as f32 / w as f32).round().max(1.0) as u32;
     let mut small = Pixmap::new(max_w, mh).ok_or("ukuran preview tidak valid")?;
     let paint = PixmapPaint { quality: FilterQuality::Bilinear, ..Default::default() };
     small.draw_pixmap(0, 0, full.as_ref(), &paint, Transform::from_scale(max_w as f32 / w as f32, mh as f32 / h as f32), None);
-    small.encode_png().map_err(|e| e.to_string())
+    Ok(small)
 }
 
 #[cfg(test)]

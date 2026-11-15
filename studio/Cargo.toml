@@ -15,3 +15,9 @@ path = "src/bin/reka-studio.rs"
 tiny-skia = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+fontdue = "0.9"
+whisper-rs = { version = "0.16", optional = true }
+
+[features]
+# In-process speech recognition (whisper.cpp). Needs cmake + libclang at build time.
+whisper = ["dep:whisper-rs"]

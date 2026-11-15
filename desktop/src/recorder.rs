@@ -66,7 +66,11 @@ pub fn ffmpeg_bin() -> PathBuf {
     let exe_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for cand in [dir.join(exe_name), dir.join("../Resources").join(exe_name)] {
+            for cand in [
+                dir.join(exe_name),
+                dir.join("../Resources").join(exe_name),
+                dir.join("../lib/reka").join(exe_name), // Linux packages: /usr/bin/reka + /usr/lib/reka/ffmpeg
+            ] {
                 if cand.is_file() {
                     return cand;
                 }

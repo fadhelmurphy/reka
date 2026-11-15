@@ -1,3 +1,4 @@
+use crate::captions::CaptionStyle;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +37,7 @@ pub struct Settings {
     pub cursor: bool,
     pub cursor_scale: f32,
     pub click_fx: bool,
+    pub captions: CaptionStyle,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             cursor: true,
             cursor_scale: 1.6,
             click_fx: true,
+            captions: CaptionStyle::default(),
         }
     }
 }
