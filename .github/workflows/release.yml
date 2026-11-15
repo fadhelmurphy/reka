@@ -46,9 +46,12 @@ jobs:
       - name: Pasang cargo-packager
         run: cargo install cargo-packager --locked
 
-      - name: Build + package
+      - name: Build binary
+        run: cargo build --release -p reka-desktop --features whisper --target ${{ matrix.target }}
+
+      - name: Package
         working-directory: desktop
-        run: cargo packager --release --target ${{ matrix.target }} --features whisper
+        run: cargo packager --release --target ${{ matrix.target }}
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -56,11 +59,7 @@ jobs:
           name: Reka ${{ github.ref_name }}
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           files: |
-            target/release/packager/*.exe
-            target/release/packager/*.dmg
-            target/release/packager/*.deb
-            target/release/packager/*.AppImage
-            desktop/target/release/packager/*.exe
-            desktop/target/release/packager/*.dmg
-            desktop/target/release/packager/*.deb
-            desktop/target/release/packager/*.AppImage
+            target/**/*.exe
+            target/**/*.dmg
+            target/**/*.deb
+            target/**/*.AppImage
