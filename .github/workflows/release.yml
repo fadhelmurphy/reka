@@ -58,7 +58,7 @@ jobs:
           name: Reka ${{ github.ref_name }}
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           files: |
-            target/**/*.exe
-            target/**/*.dmg
-            target/**/*.deb
-            target/**/*.AppImage
+            target/**/reka_*.exe
+            target/**/reka_*.dmg
+            target/**/reka_*.deb
+            target/**/reka_*.AppImage
