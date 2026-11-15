@@ -69,10 +69,10 @@ pub fn preview(n: Notifier, seq: u64, video: PathBuf, events: Arc<Vec<InputEvent
     });
 }
 
-pub fn export(n: Notifier, video: PathBuf, events: Arc<Vec<InputEvent>>, caps: Vec<Caption>, s: Settings, out: PathBuf) {
+pub fn export(n: Notifier, video: PathBuf, events: Arc<Vec<InputEvent>>, caps: Vec<Caption>, s: Settings, trim: Option<(u64, u64)>, out: PathBuf) {
     std::thread::spawn(move || {
         let n2 = n.clone();
-        let res = reka_studio::export(&ffmpeg_bin(), &video, &events, &caps, &s, &out, move |p| n2.send(Msg::ExportProgress(p)));
+        let res = reka_studio::export(&ffmpeg_bin(), &video, &events, &caps, &s, trim, &out, move |p| n2.send(Msg::ExportProgress(p)));
         n.send(Msg::ExportDone(res.map(|_| out)));
     });
 }

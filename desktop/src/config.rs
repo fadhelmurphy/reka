@@ -18,6 +18,8 @@ pub struct Config {
     pub language: String,
     pub studio: bool,
     pub auto_captions: bool,
+    /// Folder for "Simpan MP4"; `None` = ask every time.
+    pub save_dir: Option<String>,
 }
 
 impl Default for Config {
@@ -30,6 +32,7 @@ impl Default for Config {
             language: "auto".into(),
             studio: false,
             auto_captions: false,
+            save_dir: None,
         }
     }
 }

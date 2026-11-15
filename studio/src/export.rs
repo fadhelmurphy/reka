@@ -77,21 +77,36 @@ pub fn export(
     events: &[InputEvent],
     captions: &[Caption],
     s: &Settings,
+    trim: Option<(u64, u64)>,
     output: &Path,
     mut progress: impl FnMut(u32),
 ) -> Result<(), String> {
     let info = probe(ffmpeg, input)?;
     let (w, h) = (info.w, info.h);
-    let n = (info.duration * FPS as f64).ceil().max(1.0) as usize;
+    let total = (info.duration * FPS as f64).ceil().max(1.0) as usize;
+    // Trim in milliseconds on the source timeline; frame i of the output is source frame off + i.
+    let (t0, t1) = match trim {
+        Some((a, b)) if b > a => (a, b.min((info.duration * 1000.0) as u64)),
+        _ => (0, (info.duration * 1000.0) as u64),
+    };
+    let off = (t0 as f32 * FPS / 1000.0).round() as usize;
+    let n = if trim.is_some() { (((t1.saturating_sub(t0)) as f32 * FPS / 1000.0).ceil() as usize).max(1) } else { total };
+    let (ss, dur) = (format!("{:.3}", t0 as f64 / 1000.0), format!("{:.3}", t1.saturating_sub(t0) as f64 / 1000.0));
+    let track_len = total.max(off + n);
     let mut ev = events.to_vec();
     ev.sort_by_key(|e| e.t);
-    let track = build_track(&ev, n, FPS, s);
+    let track = build_track(&ev, track_len, FPS, s);
     let mut comp = Compositor::new(w, h, s, &ev)?;
     let mut cap = Captioner::new(&s.captions, comp.canvas().width(), comp.canvas().height())?;
     let show_caps = s.captions.enabled && !captions.is_empty();
 
-    let mut dec = command(ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-i"])
+    let mut dec_cmd = command(ffmpeg);
+    dec_cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if trim.is_some() {
+        dec_cmd.args(["-ss", &ss, "-t", &dur]);
+    }
+    let mut dec = dec_cmd
+        .arg("-i")
         .arg(input)
         .args(["-vf", "fps=30", "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
         .stdin(Stdio::null())
@@ -107,9 +122,11 @@ pub fn export(
     enc_cmd
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s"])
         .arg(format!("{w}x{h}"))
-        .args(["-r", "30", "-i", "-", "-i"])
-        .arg(input)
-        .args(["-map", "0:v"]);
+        .args(["-r", "30", "-i", "-"]);
+    if trim.is_some() {
+        enc_cmd.args(["-ss", &ss, "-t", &dur]);
+    }
+    enc_cmd.arg("-i").arg(input).args(["-map", "0:v"]);
     if info.has_audio {
         enc_cmd.args(["-map", "1:a:0", "-c:a", "copy"]);
     }
@@ -131,8 +148,11 @@ pub fn export(
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break Ok(()),
             Err(e) => break Err(e.to_string()),
         }
-        let f = track.get(i).or(track.last()).copied().unwrap_or_default();
-        let ms = i as f32 * 1000.0 / FPS;
+        if i >= n {
+            break Ok(());
+        }
+        let f = track.get(off + i).or(track.last()).copied().unwrap_or_default();
+        let ms = (off + i) as f32 * 1000.0 / FPS;
         comp.render(&src, &f, ms);
         if show_caps {
             cap.draw(comp.canvas_mut(), ms as u32, captions);

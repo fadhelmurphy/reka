@@ -245,7 +245,7 @@ mod e2e {
         let events_json = dir.join("raw.events.json");
         std::fs::write(&events_json, serde_json::to_vec(&ev).unwrap()).unwrap();
         let out = dir.join("studio.mp4");
-        reka_studio::export(&crate::recorder::ffmpeg_bin(), &raw_mp4, &ev, &[], &reka_studio::Settings::default(), &out, |_| {}).unwrap();
+        reka_studio::export(&crate::recorder::ffmpeg_bin(), &raw_mp4, &ev, &[], &reka_studio::Settings::default(), None, &out, |_| {}).unwrap();
         assert!(std::fs::metadata(&out).unwrap().len() > 1000);
     }
 }

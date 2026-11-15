@@ -83,9 +83,25 @@ struct Review {
     step: Step,
     after: After,
     exported: Option<PathBuf>,
+    /// Trim range in seconds.
+    trim_a: f32,
+    trim_b: f32,
+    copied: bool,
 }
 
 impl Review {
+    fn trimmed(&self) -> bool {
+        self.trim_a > 0.05 || self.trim_b < self.duration_ms as f32 / 1000.0 - 0.05
+    }
+
+    fn trim_ms(&self) -> Option<(u64, u64)> {
+        self.trimmed().then(|| ((self.trim_a * 1000.0) as u64, (self.trim_b * 1000.0) as u64))
+    }
+
+    fn out_duration_ms(&self) -> u64 {
+        self.trim_ms().map(|(a, b)| b - a).unwrap_or(self.duration_ms)
+    }
+
     /// The settings that actually get rendered.
     fn effective(&self) -> Settings {
         let mut s = self.look.clone();
@@ -104,7 +120,7 @@ impl Review {
 
     /// Whether the clip needs the compositor at all; otherwise the raw file is uploaded as is.
     fn needs_render(&self) -> bool {
-        self.studio || self.styled || (self.look.captions.enabled && !self.captions.is_empty())
+        self.trimmed() || self.studio || self.styled || (self.look.captions.enabled && !self.captions.is_empty())
     }
 }
 
@@ -431,6 +447,9 @@ impl App {
                     step: Step::Idle,
                     after: After::Upload,
                     exported: None,
+                    trim_a: 0.0,
+                    trim_b: st.duration_ms as f32 / 1000.0,
+                    copied: false,
                 });
                 self.set_panel(EDITOR);
                 if self.cfg.auto_captions {
@@ -567,14 +586,14 @@ impl App {
         r.after = after;
         r.step = Step::Exporting(0);
         let out = r.path.with_file_name(format!("{}-final.mp4", r.path.file_stem().unwrap_or_default().to_string_lossy()));
-        jobs::export(self.n.clone(), r.path.clone(), r.events.clone(), r.captions.clone(), r.effective(), out);
+        jobs::export(self.n.clone(), r.path.clone(), r.events.clone(), r.captions.clone(), r.effective(), r.trim_ms(), out);
     }
 
     fn start_upload(&mut self, path: PathBuf) {
         let base = self.server_url();
         if let Some(r) = self.review.as_mut() {
             r.step = Step::Uploading(0);
-            jobs::upload(self.rt.handle(), self.n.clone(), base, path, r.title.clone(), r.duration_ms);
+            jobs::upload(self.rt.handle(), self.n.clone(), base, path, r.title.clone(), r.out_duration_ms());
         }
     }
 
@@ -1022,12 +1041,25 @@ impl App {
                 Step::Idle => {
                     ui.horizontal(|ui| {
                         ui.label("Judul");
-                        ui.add(egui::TextEdit::singleline(&mut rv.title).desired_width(260.0));
+                        ui.add(egui::TextEdit::singleline(&mut rv.title).desired_width((ui.available_width() - 10.0).max(120.0)));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Folder simpan");
+                        let cur = self.cfg.save_dir.clone().unwrap_or_else(|| "(tanya setiap kali)".into());
+                        ui.label(RichText::new(cur).weak());
+                        if ui.button("Pilih folder…").clicked() {
+                            act = Some(UiAct::PickDir);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
                         if ui.add(egui::Button::new(RichText::new("Ekspor & unggah").strong().color(Color32::WHITE)).fill(ACCENT)).clicked() {
                             act = Some(UiAct::Upload);
                         }
-                        if ui.button("Simpan MP4…").clicked() {
+                        if ui.button("Simpan MP4").clicked() {
                             act = Some(UiAct::Save);
+                        }
+                        if ui.button("Simpan sebagai…").clicked() {
+                            act = Some(UiAct::SaveAs);
                         }
                         if ui.button("Buang").clicked() {
                             act = Some(UiAct::Discard);
@@ -1041,21 +1073,40 @@ impl App {
                     ui.add(egui::ProgressBar::new(*p as f32 / 100.0).show_percentage().text("Mengunggah…"));
                 }
                 Step::Done { link, saved } => {
-                    ui.horizontal(|ui| {
-                        if let Some(l) = link {
-                            ui.label(RichText::new("Terunggah — link disalin").color(Color32::from_rgb(0x66, 0xbb, 0x6a)));
-                            ui.hyperlink_to(l, l);
-                            if ui.button("Salin").clicked() {
+                    if let Some(l) = link {
+                        ui.label(RichText::new("Terunggah").color(Color32::from_rgb(0x66, 0xbb, 0x6a)));
+                        ui.horizontal(|ui| {
+                            // Selectable (Ctrl+A / Ctrl+C works too) and always followed by its own copy button.
+                            let mut shown = l.clone();
+                            ui.add(egui::TextEdit::singleline(&mut shown).desired_width((ui.available_width() - 90.0).max(120.0)));
+                            if ui.button(if rv.copied { "Tersalin ✓" } else { "Salin" }).clicked() {
                                 ui.ctx().copy_text(l.clone());
+                                rv.copied = true;
                             }
-                        }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Buka di browser").clicked() {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(l.clone()));
+                            }
+                            if ui.button("Rekaman baru").clicked() {
+                                act = Some(UiAct::Done);
+                            }
+                        });
+                    } else {
                         if let Some(s) = saved {
                             ui.label(RichText::new(format!("Tersimpan: {}", s.display())).color(Color32::from_rgb(0x66, 0xbb, 0x6a)));
+                            ui.horizontal(|ui| {
+                                if ui.button("Buka folder").clicked() {
+                                    if let Some(dir) = s.parent() {
+                                        ui.ctx().open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                                    }
+                                }
+                                if ui.button("Rekaman baru").clicked() {
+                                    act = Some(UiAct::Done);
+                                }
+                            });
                         }
-                        if ui.button("Rekaman baru").clicked() {
-                            act = Some(UiAct::Done);
-                        }
-                    });
+                    }
                 }
             }
             ui.add_space(6.0);
@@ -1084,15 +1135,71 @@ impl App {
             let dur = (rv.duration_ms as f32 / 1000.0).max(0.1);
             ui.spacing_mut().slider_width = (avail.x - 110.0).max(100.0);
             ui.add_enabled(!busy, egui::Slider::new(&mut rv.t, 0.0..=dur - 0.05).show_value(true).suffix(" s").fixed_decimals(1));
+            ui.add_enabled_ui(!busy, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Potong:");
+                    if ui.button("Mulai di sini").clicked() {
+                        rv.trim_a = rv.t.min(rv.trim_b - 0.2).max(0.0);
+                    }
+                    if ui.button("Akhir di sini").clicked() {
+                        rv.trim_b = rv.t.max(rv.trim_a + 0.2).min(dur);
+                    }
+                    ui.add(egui::DragValue::new(&mut rv.trim_a).range(0.0..=dur).speed(0.05).fixed_decimals(1).suffix(" s"));
+                    ui.label("→");
+                    ui.add(egui::DragValue::new(&mut rv.trim_b).range(0.0..=dur).speed(0.05).fixed_decimals(1).suffix(" s"));
+                    if rv.trimmed() && ui.button("Reset").clicked() {
+                        rv.trim_a = 0.0;
+                        rv.trim_b = dur;
+                    }
+                });
+                if rv.trimmed() {
+                    ui.weak(format!("Hasil: {:.1} s dari {:.1} s", (rv.trim_b - rv.trim_a).max(0.0), dur));
+                }
+            });
         });
 
         self.review = Some(rv);
         match act {
             Some(UiAct::Upload) => self.start_export(After::Upload),
-            Some(UiAct::Save) => {
+            Some(UiAct::Save) | Some(UiAct::SaveAs) => {
+                let ask = matches!(act, Some(UiAct::SaveAs));
                 let name = self.review.as_ref().map(|r| format!("{}.mp4", r.title.replace(['/', '\\', ':'], "-"))).unwrap_or_default();
-                if let Some(dest) = rfd::FileDialog::new().set_file_name(name).add_filter("MP4", &["mp4"]).save_file() {
+                let dir = self.cfg.save_dir.clone().map(PathBuf::from).filter(|d| d.is_dir());
+                let dest = match (&dir, ask) {
+                    (Some(d), false) => {
+                        let mut p = d.join(&name);
+                        let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                        let mut k = 2;
+                        while p.exists() {
+                            p = d.join(format!("{stem} ({k}).mp4"));
+                            k += 1;
+                        }
+                        Some(p)
+                    }
+                    _ => {
+                        let mut dlg = rfd::FileDialog::new().set_file_name(name).add_filter("MP4", &["mp4"]);
+                        if let Some(d) = &dir {
+                            dlg = dlg.set_directory(d);
+                        }
+                        dlg.save_file()
+                    }
+                };
+                if let Some(dest) = dest {
+                    if let Some(d) = dest.parent() {
+                        self.cfg.save_dir = Some(d.to_string_lossy().to_string());
+                        self.paths.save(&self.cfg);
+                    }
                     self.start_export(After::Save(dest));
+                }
+            }
+            Some(UiAct::PickDir) => {
+                let mut dlg = rfd::FileDialog::new().set_title("Folder tujuan simpan video");
+                if let Some(d) = self.cfg.save_dir.clone().map(PathBuf::from).filter(|d| d.is_dir()) {
+                    dlg = dlg.set_directory(d);
+                }
+                if let Some(d) = dlg.pick_folder() {
+                    self.cfg.save_dir = Some(d.to_string_lossy().to_string());
+                    self.paths.save(&self.cfg);
                 }
             }
             Some(UiAct::Discard) => self.discard(),
@@ -1141,6 +1248,8 @@ impl App {
 enum UiAct {
     Upload,
     Save,
+    SaveAs,
+    PickDir,
     Discard,
     Done,
     Transcribe,

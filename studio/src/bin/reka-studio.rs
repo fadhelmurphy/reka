@@ -30,6 +30,7 @@ fn main() {
             &events(&a[2]),
             &srt(a.get(5)),
             &settings(a.get(4)),
+            std::env::var("REKA_TRIM").ok().and_then(|v| v.split_once('-').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))),
             Path::new(&a[3]),
             |p| eprint!("\r{p}%"),
         ),
