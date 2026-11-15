@@ -16,10 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest,   target: aarch64-apple-darwin,     ffmpeg: darwin-arm64 }
-          - { os: macos-13,       target: x86_64-apple-darwin,      ffmpeg: darwin-x64 }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,   ffmpeg: win32-x64 }
-          - { os: ubuntu-22.04,   target: x86_64-unknown-linux-gnu, ffmpeg: linux-x64 }
+          - { os: macos-latest,   target: aarch64-apple-darwin,     ffmpeg: darwin-arm64, formats: dmg }
+          - { os: macos-13,       target: x86_64-apple-darwin,      ffmpeg: darwin-x64, formats: dmg }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,   ffmpeg: win32-x64, formats: nsis }
+          - { os: ubuntu-22.04,   target: x86_64-unknown-linux-gnu, ffmpeg: linux-x64, formats: 'deb,appimage' }
     runs-on: ${{ matrix.os }}
     env:
       # Binding bawaan hanya valid untuk Linux; Windows/macOS membuat sendiri (libclang sudah ada di runner).
@@ -52,7 +52,7 @@ jobs:
 
       - name: Package
         working-directory: desktop
-        run: cargo packager --release --target ${{ matrix.target }}
+        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
 
       - uses: softprops/action-gh-release@v2
         with:
