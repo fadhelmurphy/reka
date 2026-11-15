@@ -23,7 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Binding bawaan hanya valid untuk Linux; Windows/macOS membuat sendiri (libclang sudah ada di runner).
-      WHISPER_DONT_GENERATE_BINDINGS: ${{ runner.os == 'Linux' && '1' || '' }}
+      WHISPER_DONT_GENERATE_BINDINGS: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
 
