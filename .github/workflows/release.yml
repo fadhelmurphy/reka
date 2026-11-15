@@ -1,7 +1,7 @@
 name: Release installers
 
 # Push tag seperti v0.2.0 (atau jalankan manual) untuk membangun installer semua OS.
-# Hasilnya masuk ke GitHub Release berstatus draft.
+# Hasilnya langsung terbit di GitHub Releases.
 on:
   push:
     tags: ['v*']
@@ -54,7 +54,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: false
           name: Reka ${{ github.ref_name }}
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           files: |
