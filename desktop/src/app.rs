@@ -542,7 +542,7 @@ impl App {
             }
             Msg::UploadDone(Ok(link)) => {
                 self.ctx.copy_text(link.clone());
-                self.ctx.open_url(egui::OpenUrl::new_tab(link.clone()));
+                open_target(&link);
                 if let Some(r) = self.review.as_mut() {
                     let _ = std::fs::remove_file(&r.path);
                     if let Some(e) = &r.exported {
@@ -687,10 +687,11 @@ impl App {
         let url = self.server_url();
         ui.horizontal(|ui| {
             if ui.button("Buka library").clicked() {
-                self.ctx.open_url(egui::OpenUrl::new_tab(url));
+                open_target(&url);
             }
             if ui.button("Folder rekaman").clicked() {
-                self.ctx.open_url(egui::OpenUrl::new_tab(format!("file://{}", self.paths.recordings.display())));
+                let _ = std::fs::create_dir_all(&self.paths.recordings);
+                open_target(&self.paths.recordings.to_string_lossy());
             }
         });
         ui.add_space(4.0);
@@ -1086,7 +1087,7 @@ impl App {
                         });
                         ui.horizontal(|ui| {
                             if ui.button("Buka di browser").clicked() {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(l.clone()));
+                                open_target(l);
                             }
                             if ui.button("Rekaman baru").clicked() {
                                 act = Some(UiAct::Done);
@@ -1098,7 +1099,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 if ui.button("Buka folder").clicked() {
                                     if let Some(dir) = s.parent() {
-                                        ui.ctx().open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                                        open_target(&dir.to_string_lossy());
                                     }
                                 }
                                 if ui.button("Rekaman baru").clicked() {
@@ -1337,4 +1338,34 @@ impl eframe::App for App {
             input::end();
         }
     }
+}
+
+/// Open a URL, file or folder with the OS default handler.
+fn open_target(target: &str) {
+    use std::process::{Command, Stdio};
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = if target.starts_with("http") { Command::new("rundll32") } else { Command::new("explorer") };
+        if target.starts_with("http") {
+            c.args(["url.dll,FileProtocolHandler", target]);
+        } else {
+            c.arg(target);
+        }
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg(target);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = Command::new("xdg-open");
+        c.arg(target);
+        c
+    };
+    let _ = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
