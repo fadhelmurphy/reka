@@ -7,6 +7,7 @@ mod config;
 mod devices;
 mod input;
 mod jobs;
+mod player;
 mod recorder;
 
 fn main() -> eframe::Result {

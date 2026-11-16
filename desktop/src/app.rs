@@ -4,6 +4,7 @@ use crate::camera::{self, Camera};
 use crate::config::{self, Config, Paths};
 use crate::devices::Devices;
 use crate::input;
+use crate::player::Player;
 use crate::jobs::{self, Msg, Notifier};
 use crate::recorder::{RecOpts, Screen, Session};
 use eframe::egui::{self, Color32, RichText, Vec2, ViewportCommand};
@@ -87,6 +88,10 @@ struct Review {
     trim_a: f32,
     trim_b: f32,
     copied: bool,
+    player: Option<Player>,
+    src_size: (u32, u32),
+    /// What a timeline drag moves: 0 = playhead, 1 = cut start, 2 = cut end.
+    drag: u8,
 }
 
 impl Review {
@@ -428,6 +433,7 @@ impl App {
                 let mut look = self.cfg.look.clone();
                 look.captions.enabled = self.cfg.auto_captions;
                 let studio = st.events.is_some();
+                let path_for_probe = st.path.clone();
                 self.review = Some(Review {
                     title: format!("Rekaman {}", chrono::Local::now().format("%d %b %H:%M")),
                     path: st.path,
@@ -450,6 +456,9 @@ impl App {
                     trim_a: 0.0,
                     trim_b: st.duration_ms as f32 / 1000.0,
                     copied: false,
+                    player: None,
+                    src_size: reka_studio::probe(&crate::recorder::ffmpeg_bin(), &path_for_probe).map(|i| (i.w, i.h)).unwrap_or((1280, 720)),
+                    drag: 0,
                 });
                 self.set_panel(EDITOR);
                 if self.cfg.auto_captions {
@@ -1122,41 +1131,184 @@ impl App {
                     }
                 });
             }
+            let ctx = ui.ctx().clone();
+            let dur = (rv.duration_ms as f32 / 1000.0).max(0.1);
+            let mut toggle = false;
+            let mut seek_to: Option<f32> = None;
+            if !ctx.egui_wants_keyboard_input() && !busy {
+                ctx.input(|i| {
+                    if i.key_pressed(egui::Key::Space) {
+                        toggle = true;
+                    }
+                    let step = if i.modifiers.shift { 1.0 } else { 1.0 / 30.0 };
+                    if i.key_pressed(egui::Key::ArrowRight) {
+                        seek_to = Some((rv.t + step).min(dur - 0.05));
+                    }
+                    if i.key_pressed(egui::Key::ArrowLeft) {
+                        seek_to = Some((rv.t - step).max(0.0));
+                    }
+                    if i.key_pressed(egui::Key::I) {
+                        rv.trim_a = rv.t.min(rv.trim_b - 0.2).max(0.0);
+                    }
+                    if i.key_pressed(egui::Key::O) {
+                        rv.trim_b = rv.t.max(rv.trim_a + 0.2).min(dur);
+                    }
+                });
+            }
+
+            // Playback: show the frame that is due; stop at the end of the cut.
+            if let Some(p) = rv.player.as_mut() {
+                let frame = p.poll();
+                let pos = p.pos();
+                let done = p.ended || pos >= rv.trim_b;
+                if let Some(f) = frame {
+                    let ci = egui::ColorImage::from_rgba_premultiplied([f.w, f.h], &f.rgba);
+                    match rv.tex.as_mut() {
+                        Some(t) => t.set(ci, egui::TextureOptions::LINEAR),
+                        None => rv.tex = Some(ctx.load_texture("preview", ci, egui::TextureOptions::LINEAR)),
+                    }
+                }
+                rv.t = pos.min(dur - 0.05);
+                if done {
+                    rv.player = None;
+                    rv.dirty = true;
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+
             let avail = ui.available_size();
-            let slider_h = 34.0;
+            let tl_h = 150.0;
             if let Some(tex) = &rv.tex {
                 let ts = tex.size_vec2();
-                let k = ((avail.x) / ts.x).min((avail.y - slider_h) / ts.y).max(0.1);
+                let k = ((avail.x) / ts.x).min((avail.y - tl_h) / ts.y).max(0.1);
                 ui.vertical_centered(|ui| {
                     ui.image((tex.id(), ts * k));
                 });
             } else {
                 ui.centered_and_justified(|ui| ui.spinner());
             }
-            let dur = (rv.duration_ms as f32 / 1000.0).max(0.1);
-            ui.spacing_mut().slider_width = (avail.x - 110.0).max(100.0);
-            ui.add_enabled(!busy, egui::Slider::new(&mut rv.t, 0.0..=dur - 0.05).show_value(true).suffix(" s").fixed_decimals(1));
+
+            // Transport row.
             ui.add_enabled_ui(!busy, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Potong:");
-                    if ui.button("Mulai di sini").clicked() {
+                    let playing = rv.player.is_some();
+                    if ui.add(egui::Button::new(RichText::new(if playing { "Jeda" } else { "Putar" }).strong()).min_size(Vec2::new(64.0, 0.0))).clicked() {
+                        toggle = true;
+                    }
+                    ui.monospace(format!("{} / {}", fmt_secs(rv.t), fmt_secs(dur)));
+                    ui.separator();
+                    if ui.button("Mulai di sini (I)").clicked() {
                         rv.trim_a = rv.t.min(rv.trim_b - 0.2).max(0.0);
                     }
-                    if ui.button("Akhir di sini").clicked() {
+                    if ui.button("Akhir di sini (O)").clicked() {
                         rv.trim_b = rv.t.max(rv.trim_a + 0.2).min(dur);
                     }
-                    ui.add(egui::DragValue::new(&mut rv.trim_a).range(0.0..=dur).speed(0.05).fixed_decimals(1).suffix(" s"));
-                    ui.label("→");
-                    ui.add(egui::DragValue::new(&mut rv.trim_b).range(0.0..=dur).speed(0.05).fixed_decimals(1).suffix(" s"));
-                    if rv.trimmed() && ui.button("Reset").clicked() {
+                    if rv.trimmed() && ui.button("Reset potongan").clicked() {
                         rv.trim_a = 0.0;
                         rv.trim_b = dur;
                     }
                 });
-                if rv.trimmed() {
-                    ui.weak(format!("Hasil: {:.1} s dari {:.1} s", (rv.trim_b - rv.trim_a).max(0.0), dur));
-                }
             });
+
+            // Timeline: ruler, cut region with draggable in/out handles, red playhead.
+            let w = (ui.available_width() - 6.0).max(120.0);
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 64.0), egui::Sense::click_and_drag());
+            let x_of = |t: f32| rect.left() + (t / dur).clamp(0.0, 1.0) * rect.width();
+            let t_of = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) * dur;
+            let paint = ui.painter_at(rect.expand(2.0));
+            paint.rect_filled(rect, 4.0, Color32::from_rgb(0x1b, 0x1b, 0x20));
+            // Ruler.
+            let step = [0.5f32, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0]
+                .into_iter()
+                .find(|s| rect.width() * s / dur >= 70.0)
+                .unwrap_or(900.0);
+            let mut tt = 0.0;
+            while tt <= dur {
+                let x = x_of(tt);
+                paint.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.top() + 8.0)], egui::Stroke::new(1.0, Color32::GRAY));
+                paint.text(egui::pos2(x + 3.0, rect.top() + 1.0), egui::Align2::LEFT_TOP, fmt_secs(tt), egui::FontId::monospace(10.0), Color32::GRAY);
+                tt += step;
+            }
+            // Clip bar: kept part bright, cut-away parts dim.
+            let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 22.0), egui::pos2(rect.right(), rect.bottom() - 4.0));
+            paint.rect_filled(bar, 3.0, Color32::from_rgb(0x2c, 0x2c, 0x34));
+            let kept = egui::Rect::from_min_max(egui::pos2(x_of(rv.trim_a), bar.top()), egui::pos2(x_of(rv.trim_b), bar.bottom()));
+            paint.rect_filled(kept, 3.0, ACCENT.gamma_multiply(0.75));
+            for c in &rv.captions {
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(x_of(c.start as f32 / 1000.0), bar.center().y - 3.0),
+                    egui::pos2(x_of(c.end as f32 / 1000.0).max(x_of(c.start as f32 / 1000.0) + 2.0), bar.center().y + 3.0),
+                );
+                paint.rect_filled(r, 2.0, Color32::from_rgb(0xff, 0xe0, 0x82));
+            }
+            let handle = |x: f32| egui::Rect::from_center_size(egui::pos2(x, bar.center().y), Vec2::new(9.0, bar.height() + 6.0));
+            let (ha, hb) = (handle(x_of(rv.trim_a)), handle(x_of(rv.trim_b)));
+            for h in [ha, hb] {
+                paint.rect_filled(h, 3.0, Color32::from_rgb(0xff, 0xc1, 0x07));
+            }
+            let px = x_of(rv.t);
+            paint.line_segment([egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())], egui::Stroke::new(2.0, Color32::from_rgb(0xff, 0x52, 0x52)));
+            paint.rect_filled(egui::Rect::from_center_size(egui::pos2(px, rect.top() + 3.0), Vec2::new(11.0, 7.0)), 2.0, Color32::from_rgb(0xff, 0x52, 0x52));
+
+            if !busy {
+                if resp.drag_started() || resp.clicked() {
+                    if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()) {
+                        rv.drag = if (pos.x - x_of(rv.trim_a)).abs() <= 8.0 && pos.y > bar.top() - 4.0 {
+                            1
+                        } else if (pos.x - x_of(rv.trim_b)).abs() <= 8.0 && pos.y > bar.top() - 4.0 {
+                            2
+                        } else {
+                            0
+                        };
+                    }
+                }
+                if resp.hovered() {
+                    if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                        let near = ((pos.x - x_of(rv.trim_a)).abs() <= 8.0 || (pos.x - x_of(rv.trim_b)).abs() <= 8.0) && pos.y > bar.top() - 4.0;
+                        ui.ctx().set_cursor_icon(if near { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::PointingHand });
+                    }
+                }
+                if resp.dragged() || resp.clicked() {
+                    if let Some(pos) = resp.interact_pointer_pos() {
+                        let t = t_of(pos.x);
+                        match rv.drag {
+                            1 => {
+                                rv.trim_a = t.min(rv.trim_b - 0.2).max(0.0);
+                                seek_to = Some(rv.trim_a);
+                            }
+                            2 => {
+                                rv.trim_b = t.max(rv.trim_a + 0.2).min(dur);
+                                seek_to = Some((rv.trim_b - 0.05).max(0.0));
+                            }
+                            _ => seek_to = Some(t.min(dur - 0.05)),
+                        }
+                    }
+                }
+            }
+            if rv.trimmed() {
+                ui.weak(format!("Hasil: {} dari {} · I/O = tandai awal/akhir, Spasi = putar, panah kiri/kanan = per frame (Shift = 1 dtk)", fmt_secs(rv.trim_b - rv.trim_a), fmt_secs(dur)));
+            } else {
+                ui.weak("Seret pegangan kuning untuk memotong · Spasi = putar · I/O = tandai awal/akhir · panah kiri/kanan = per frame");
+            }
+
+            if let Some(t) = seek_to {
+                rv.player = None;
+                rv.t = t;
+            }
+            if toggle {
+                if rv.player.is_some() {
+                    rv.player = None;
+                    rv.dirty = true;
+                } else {
+                    let from = if rv.t < rv.trim_a || rv.t >= rv.trim_b - 0.1 { rv.trim_a } else { rv.t };
+                    rv.t = from;
+                    match Player::start(&rv.path, from, rv.src_size, ctx.clone()) {
+                        Ok(p) => rv.player = Some(p),
+                        Err(e) => self.error = Some(e),
+                    }
+                }
+            }
         });
 
         self.review = Some(rv);
@@ -1242,7 +1394,9 @@ impl App {
             }
             None => {}
         }
-        self.kick_preview();
+        if self.review.as_ref().map(|r| r.player.is_none()).unwrap_or(true) {
+            self.kick_preview();
+        }
     }
 }
 
@@ -1368,4 +1522,10 @@ fn open_target(target: &str) {
         c
     };
     let _ = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
+
+fn fmt_secs(t: f32) -> String {
+    let t = t.max(0.0);
+    let (m, sec) = ((t / 60.0) as u32, t % 60.0);
+    format!("{m}:{sec:04.1}")
 }
